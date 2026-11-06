@@ -1,4 +1,4 @@
-name: Build and release C++ game
+name: Test and release DevSpace
 on:
   push:
     branches: [main]
@@ -6,59 +6,37 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: native-release
+  group: devspace-release
   cancel-in-progress: false
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform: Windows-x64
-          - os: ubuntu-22.04
-            platform: Linux-x64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-      - name: Compile
-        run: cmake --build build --config Release --parallel 2
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
-      - name: Stage
-        run: cmake --install build --config Release --prefix dist
-      - name: Package Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path dist/* -DestinationPath StarRunner-Windows-x64.zip
-      - name: Package Linux
-        if: runner.os == 'Linux'
-        run: tar -czf StarRunner-Linux-x64.tar.gz -C dist .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: StarRunner-${{ matrix.platform }}
-          path: StarRunner-${{ matrix.platform }}.*
-          if-no-files-found: error
   release:
-    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          path: packages
-          merge-multiple: true
-      - name: Publish binaries
+          python-version: '3.12'
+      - name: Compile Python
+        run: python -m compileall -q server.py scripts tests
+      - name: Test authentication and uploads over HTTP
+        run: python -m unittest discover -s tests -v
+      - name: Check JavaScript
+        run: node --check static/app.js
+      - name: Build exact 2.2 GB release
+        run: python scripts/package.py
+      - name: Check unpacker
+        run: |
+          cp scripts/unpack.py dist/unpack.py
+          python dist/unpack.py
+          test -f dist/DevSpace/server.py
+          test ! -d dist/DevSpace/download-size-padding
+      - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: native-${{ github.run_number }}
+          RELEASE_TAG: devspace-${{ github.run_number }}
           COMMIT: ${{ github.sha }}
         run: |
-          gh release create "$RELEASE_TAG" packages/* --target "$COMMIT" --title "Star Runner C++ #${{ github.run_number }}" --notes "Native C++17 desktop game. Windows: extract StarRunner-Windows-x64.zip and run StarRunner.exe. Linux: extract StarRunner-Linux-x64.tar.gz and run ./StarRunner. Arrows/WASD to move, Enter to start, P/Escape to pause. Linux requires OpenGL 3.3 and Ubuntu 22.04 or newer."
+          gh release create "$RELEASE_TAG" dist/DevSpace.zip.part1 dist/DevSpace.zip.part2 dist/SHA256.json dist/unpack.py --target "$COMMIT" --title "DevSpace — 2.2 GB website" --notes "Download both ZIP parts, SHA256.json, and unpack.py into one folder. Run python unpack.py, then open DevSpace/start.bat on Windows or run python3 DevSpace/server.py. Open http://127.0.0.1:8080. Requires Python 3.11+. Developer username: hellodev. First launch asks you to set the developer password privately. Combined ZIP parts: exactly 2,200,000,000 bytes, including explicitly labeled padding skipped during extraction. Features: hashed passwords, registration, private file uploading, and developer profiles. This is a downloadable local website, not a hosted URL."

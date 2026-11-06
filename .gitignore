@@ -1,4 +1,4 @@
-/build/
-/dist/
-*.zip
-*.tar.gz
+data/
+dist/
+__pycache__/
+*.pyc
