@@ -1,0 +1,64 @@
+name: Build and release C++ game
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-release
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows-x64
+          - os: ubuntu-22.04
+            platform: Linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Compile
+        run: cmake --build build --config Release --parallel 2
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Stage
+        run: cmake --install build --config Release --prefix dist
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath StarRunner-Windows-x64.zip
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: tar -czf StarRunner-Linux-x64.tar.gz -C dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StarRunner-${{ matrix.platform }}
+          path: StarRunner-${{ matrix.platform }}.*
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Publish binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: native-${{ github.run_number }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "$RELEASE_TAG" packages/* --target "$COMMIT" --title "Star Runner C++ #${{ github.run_number }}" --notes "Native C++17 desktop game. Windows: extract StarRunner-Windows-x64.zip and run StarRunner.exe. Linux: extract StarRunner-Linux-x64.tar.gz and run ./StarRunner. Arrows/WASD to move, Enter to start, P/Escape to pause. Linux requires OpenGL 3.3 and Ubuntu 22.04 or newer."
